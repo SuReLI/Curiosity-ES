@@ -1,0 +1,181 @@
+from Game import Maze
+import os
+import numpy as np 
+import json
+import subprocess
+from gym import spaces
+
+
+class CMaze(Maze):
+
+	def __init__(self, xinit=5, yinit=5, xgoal=90, ygoal=90, time_horizon=3000, filename=None):
+		super().__init__(xinit, yinit, xgoal , ygoal, time_horizon)
+		# pygame plot:
+		self.screen=None
+		self.clock=None
+		self.screen_width = 600
+		self.screen_height = 600
+		self.metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 50}
+
+		# gym
+		self.action_space = spaces.Box(np.array([0,0]),np.array([2*np.pi,self.vmax]), dtype=np.float32)
+		self.observation_space = spaces.Box(-np.ones(shape=(1,4+self.agent.n_beams)).flatten(), np.ones(shape=(1,4+self.agent.n_beams)).flatten(), dtype=np.float32)
+
+		# load
+		if filename!=None:
+			self.load(filename)
+
+
+	def step(self,action):
+		# Cstep
+		state, reward, done, info = self.Cstep(action)
+		return np.array(state), reward, done, info
+
+	def reset(self):
+		# Creset
+		state=self.Creset()
+		return np.array(state)
+
+	def render(self, type="py", freeze=False, behaviours=[], save_image=False, filename="behaviours"):
+		if type=="py":
+			import pygame 
+			if self.screen is None:
+				pygame.init()
+				pygame.display.init()
+				self.screen = pygame.display.set_mode((self.screen_width, self.screen_height))
+			if self.clock is None:
+				self.clock = pygame.time.Clock()
+
+			# Screen
+			self.surf = pygame.Surface((self.screen_width, self.screen_height))
+			self.surf.fill((255, 255, 255))
+			# ratio
+			rwidth=self.screen_width/self.width
+			rheight=self.screen_height/self.height
+			rnorm=np.sqrt(rwidth**2+rheight**2)
+
+			# blocks 
+			for block in self.block_list:
+				pygame.draw.rect(self.surf, (0,0,0), (block.x*rwidth,block.y*rheight,block.w*rwidth,block.h*rheight), 0) 
+			
+			# goal
+			pygame.draw.circle(self.surf, (0,255,0),(self.xgoal*rwidth, self.ygoal*rheight), self.agent.r*rnorm , 0) 
+
+			# start
+			
+			pygame.draw.circle(self.surf, (0,0,0),(self.xinit*rwidth, self.yinit*rheight), self.agent.r*rnorm , 0) 
+			
+			if len(behaviours)==0:
+				# agent
+				pygame.draw.circle(self.surf, (0,0,255),(self.agent.x*rwidth, self.agent.y*rheight), self.agent.r*rnorm , 0) 
+
+				
+				# lidar 
+				for theta,dist in zip(self.agent.beams,self.agent.lidar_observation()):
+					x0,y0=self.agent.x*rwidth,self.agent.y*rheight
+					x1,y1=(self.agent.x+dist*np.cos(theta))*rwidth,(self.agent.y+dist*np.sin(theta))*rheight
+					pygame.draw.line(self.surf, (255,0,0), (x0, y0), (x1, y1))
+				
+
+			else :
+				for behaviour in behaviours:
+					(xscreen, yscreen), rscreen=(behaviour[0]*rwidth,behaviour[1]*rheight),self.treshold*rnorm
+					pygame.draw.circle(self.surf, (0,0, 255),(xscreen, yscreen), rscreen/5, 0)
+
+			# Project surface on screen 
+			self.surf = pygame.transform.flip(self.surf, False, True)
+			self.screen.blit(self.surf, (0, 0))
+			if save_image:
+				filename = filename+'.JPG'
+				pygame.image.save(self.screen, filename)
+				
+			if freeze:
+				try:
+					while 1:
+						event = pygame.event.wait()
+						if event.type == pygame.QUIT:
+							break
+						if event.type == pygame.KEYDOWN:
+							if event.key == pygame.K_ESCAPE or event.unicode == 'q':
+								break
+						pygame.display.flip()
+				finally:
+					pygame.quit() 
+			elif not freeze :
+				pygame.event.pump()
+				self.clock.tick(self.metadata["render_fps"])
+				pygame.display.flip()
+
+				
+
+
+
+		else:
+			self.Crender()
+
+	def save(self, filename : str):
+		file=filename + str(".json")
+		path="/home/pletctj6/volumes/Documents/Environment/CMaze/Mazes/"+file
+
+		data={}
+		with open(path, 'w') as outfile:
+			# Maze data
+			maze_data={}
+			maze_data["xinit"]=self.xinit
+			maze_data["yinit"]=self.yinit
+			maze_data["xgoal"]=self.xgoal
+			maze_data["ygoal"]=self.ygoal
+			data["maze_data"]=maze_data
+			# Blocks data
+			blocks_data={}
+			for i in range(len(self.block_list)): 
+				block_data={}
+				block_data["x"] = self.block_list[i].x
+				block_data["y"] = self.block_list[i].y
+				block_data["w"] = self.block_list[i].w
+				block_data["h"] = self.block_list[i].h
+				blocks_data["block_"+str(i)]=block_data
+			data["blocks_data"]=blocks_data
+			json.dump(data, outfile)
+			
+	def load(self,filename : str):
+		file=filename + str(".json")
+		path="/home/pletctj6/volumes/Documents/Environment/CMaze/Mazes/"+file
+		with open(path) as json_file:
+			data = json.load(json_file)
+		# Maze data
+		self.xinit=data["maze_data"]["xinit"]
+		self.yinit=data["maze_data"]["yinit"]
+		self.xgoal=data["maze_data"]["xgoal"]
+		self.ygoal=data["maze_data"]["ygoal"]
+		# Blocks data
+		# blocks
+		for block_data in data["blocks_data"].values(): 
+			x=block_data["x"]
+			y=block_data["y"]
+			w=block_data["w"]
+			h=block_data["h"]
+			self.add_block(x,y,w,h)
+		
+
+
+
+
+
+
+
+if __name__=="__main__":
+
+	env=CMaze()
+	env.add_block(10,0,10,90)
+	env.add_block(10,80,80,10)
+	env.add_block(30,60,70,10)
+	env.add_block(10,40,80,10)
+	env.add_block(30,20,70,10)
+	state=env.reset()
+	# env.render("C")
+	for k in range(10000):
+		action=np.array([-1,1])
+		state, reward, done, info = env.step(action)
+
+		env.render()
